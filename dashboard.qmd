@@ -3,7 +3,6 @@ title: "Workload Manager Dashboard"
 format: 
   dashboard:
     orientation: columns
-    nav-buttons: [github]
     theme: flatly
 server: shiny
 ---
