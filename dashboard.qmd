@@ -1,0 +1,254 @@
+---
+title: "Workload Manager Dashboard"
+format: 
+  dashboard:
+    orientation: columns
+    nav-buttons: [github]
+    theme: flatly
+server: shiny
+---
+
+```{r}
+#| context: setup
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(DT)
+library(googlesheets4)
+library(tidyr)
+library(bslib)
+library(bsicons)
+
+# Désactiver l'authentification pour les sheets publics
+gs4_deauth()
+
+# URL du Google Sheet depuis variable d'environnement
+sheet_url <- Sys.getenv("GOOGLE_SHEET_URL", default = "")
+
+# Fonction pour charger les données
+load_data <- function() {
+  # Charger les données de planification
+  planification <- tryCatch({
+    read.csv("planification.csv", stringsAsFactors = FALSE)
+  }, error = function(e) {
+    data.frame(domaine = character(0), planification = numeric(0))
+  })
+  
+  tryCatch({
+    raw_data <- read_sheet(sheet_url)
+    
+    # Identifier la colonne horodateur (première colonne)
+    horodateur_col <- names(raw_data)[1]
+    
+    # Fonction pour nettoyer les colonnes (gérer les listes et types mixtes)
+    clean_column <- function(x) {
+      # Si c'est une liste, extraire le premier élément
+      if (is.list(x)) {
+        x <- sapply(x, function(item) {
+          if (is.null(item) || length(item) == 0) {
+            return(NA)
+          } else {
+            return(as.character(item[1]))
+          }
+        })
+      }
+      return(as.character(x))
+    }
+    
+    # Nettoyer toutes les colonnes sauf horodateur
+    cleaned_data <- raw_data |>
+      mutate(across(-!!sym(horodateur_col), clean_column))
+    
+    # Convertir en format long pour traitement agnostique
+    data <- cleaned_data |>
+      # Convertir l'horodateur en date
+      mutate(Date = as.Date(!!sym(horodateur_col))) |>
+      # Sélectionner toutes les colonnes sauf horodateur
+      select(-!!sym(horodateur_col)) |>
+      # Ajouter un ID de ligne
+      mutate(row_id = row_number()) |>
+      # Pivoter en format long
+      tidyr::pivot_longer(
+        cols = -c(row_id, Date),
+        names_to = "Domaine",
+        values_to = "Heures"
+      ) |>
+      # Supprimer les valeurs manquantes et vides
+      filter(!is.na(Heures) & Heures != "" & Heures != "NA") |>
+      # Convertir les heures en numérique
+      mutate(Heures = as.numeric(Heures)) |>
+      # Supprimer les lignes avec des valeurs non numériques ou nulles
+      filter(!is.na(Heures) & Heures > 0) |>
+      # Ajouter les données de planification
+      left_join(planification, by = c("Domaine" = "domaine"))
+    
+    return(data)
+  }, error = function(e) {
+    # Données de démonstration si le sheet n'est pas accessible
+    demo_data <- data.frame(
+      Date = rep(seq(as.Date("2024-01-01"), as.Date("2024-12-31"), by = "week"), each = 3),
+      Domaine = rep(c("domaine 1", "domaine 2", "domaine 3"), 52),
+      Heures = sample(seq(0.25, 8, 0.25), 156, replace = TRUE),
+      row_id = rep(1:52, each = 3)
+    ) |>
+    left_join(planification, by = c("Domaine" = "domaine"))
+    
+    return(demo_data)
+  })
+}
+
+# Charger les données
+data <- load_data()
+```
+
+## Sidebar {.sidebar}
+
+```{r}
+checkboxGroupInput("domaine_filter", 
+                  "Sélectionner les domaines:",
+                  choices = unique(data$Domaine),
+                  selected = unique(data$Domaine))
+
+checkboxGroupInput("mois_filter",
+                  "Sélectionner les mois:",
+                  choices = unique(format(data$Date, "%B %Y")),
+                  selected = unique(format(data$Date, "%B %Y")))
+```
+
+## Column {width="60%"}
+
+### Heures par domaine
+
+```{r}
+plotlyOutput("heures_projet_plot")
+```
+
+### Évolution temporelle
+
+```{r}
+plotlyOutput("evolution_plot")
+```
+
+## Column {width="40%"}
+
+### Résumé
+
+```{r}
+value_box(
+  title = "Total heures",
+  value = textOutput("total_heures"),
+  showcase = bs_icon("clock")
+)
+
+value_box(
+  title = "Nombre de domaines",
+  value = textOutput("nb_domaines"),
+  showcase = bs_icon("folder")
+)
+
+value_box(
+  title = "Moyenne par entrée",
+  value = textOutput("moyenne_heures"),
+  showcase = bs_icon("calculator")
+)
+```
+
+### Données détaillées
+
+```{r}
+DTOutput("data_table")
+```
+
+```{r}
+#| context: server
+
+# Données filtrées réactives
+filtered_data <- reactive({
+  df <- data
+  
+  # Filtre par domaines (sélection multiple)
+  if (!is.null(input$domaine_filter)) {
+    df <- df |> filter(Domaine %in% input$domaine_filter)
+  }
+  
+  # Filtre par mois (sélection multiple)
+  if (!is.null(input$mois_filter)) {
+    df <- df |> filter(format(Date, "%B %Y") %in% input$mois_filter)
+  }
+  
+  return(df)
+})
+
+# Graphique heures par domaine
+output$heures_projet_plot <- renderPlotly({
+  p <- filtered_data() |>
+    group_by(Domaine) |>
+    summarise(Total_Heures = sum(Heures, na.rm = TRUE), .groups = "drop") |>
+    ggplot(aes(x = reorder(Domaine, Total_Heures), y = Total_Heures, fill = Domaine)) +
+    geom_col() +
+    coord_flip() +
+    labs(title = "Heures totales par domaine",
+         x = "Domaine", y = "Heures") +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  ggplotly(p)
+})
+
+# Graphique évolution temporelle
+output$evolution_plot <- renderPlotly({
+  p <- filtered_data() |>
+    group_by(Date, Domaine) |>
+    summarise(Heures = sum(Heures, na.rm = TRUE), .groups = "drop") |>
+    ggplot(aes(x = Date, y = Heures, color = Domaine)) +
+    geom_line() +
+    geom_point() +
+    labs(title = "Évolution des heures dans le temps",
+         x = "Date", y = "Heures") +
+    theme_minimal()
+  
+  ggplotly(p)
+})
+
+# Value boxes
+output$total_heures <- renderText({
+  total_realise <- sum(filtered_data()$Heures, na.rm = TRUE)
+  
+  # Calculer la planification des domaines sélectionnés (constante)
+  domaines_selectionnes <- unique(filtered_data()$Domaine)
+  planification_data <- tryCatch({
+    read.csv("planification.csv", stringsAsFactors = FALSE)
+  }, error = function(e) {
+    data.frame(domaine = character(0), planification = numeric(0))
+  })
+  
+  total_planifie <- planification_data |>
+    filter(domaine %in% domaines_selectionnes) |>
+    pull(planification) |>
+    sum(na.rm = TRUE)
+  
+  if (total_planifie > 0) {
+    paste(total_realise, "h /", total_planifie, "h")
+  } else {
+    paste(total_realise, "h")
+  }
+})
+
+output$nb_domaines <- renderText({
+  nb <- length(unique(filtered_data()$Domaine))
+  as.character(nb)
+})
+
+output$moyenne_heures <- renderText({
+  moyenne <- round(mean(filtered_data()$Heures, na.rm = TRUE), 1)
+  paste(moyenne, "h")
+})
+
+# Tableau de données
+output$data_table <- renderDT({
+  filtered_data() |>
+    arrange(desc(Date)) |>
+    datatable(options = list(pageLength = 10, scrollX = TRUE))
+})
+```

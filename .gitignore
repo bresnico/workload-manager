@@ -1,0 +1,18 @@
+# Fichiers de données
+planification.csv
+
+# Configuration sensible
+.env
+
+# Fichiers temporaires R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
