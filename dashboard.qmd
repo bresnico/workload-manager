@@ -24,7 +24,10 @@ library(bsicons)
 gs4_deauth()
 
 # URL du Google Sheet depuis variable d'environnement
-sheet_url <- Sys.getenv("GOOGLE_SHEET_URL", default = "")
+if (file.exists(".env")) {
+  readRenviron(".env")
+}
+sheet_url <- Sys.getenv("GOOGLE_SHEET_URL")
 
 # Fonction pour charger les données
 load_data <- function() {
