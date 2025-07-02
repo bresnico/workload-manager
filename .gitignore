@@ -16,3 +16,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Fichiers de test et développement
+test_sheet.R
+dashboard.html
